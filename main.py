@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple, Optional
 
 ROOT_DIR = Path('D:/dataset/share')  # ← укажите корень сканирования
 OUTPUT_CSV = Path('pii_scan_results.csv')
-INCLUDE_EXTS = {'doc','docx','gif','html','ipynb','jpeg','jpg','pdf','php','png','rtf','xls'}
+INCLUDE_EXTS = {'doc','docx','gif','html','jpeg','jpg','pdf','mp4','png','rtf','xls'}
 
 def safe_import(name):
     try:
@@ -150,20 +150,6 @@ def extract_text_rtf(path: Path) -> str:
     raw = re.sub(r'[{}]', ' ', raw)
     return re.sub(r'\s+', ' ', raw)
 
-def extract_text_ipynb(path: Path) -> str:
-    try:
-        data = json.loads(path.read_text(encoding='utf-8', errors='ignore'))
-        parts = []
-        for cell in data.get('cells', []):
-            src = cell.get('source', [])
-            if isinstance(src, list):
-                parts.append(''.join(src))
-            elif isinstance(src, str):
-                parts.append(src)
-        return '\n'.join(parts)
-    except Exception:
-        return ''
-
 def extract_text_xls(path: Path) -> str:
     if pandas is None:
         return ''
@@ -189,6 +175,74 @@ def extract_text_doc(path: Path) -> str:
     raw = extract_text_generic(path)
     return raw
 
+def extract_mp4(path: Path) -> str:
+    if PIL is None or pytesseract is None:
+        return ''
+
+    try:
+        import cv2
+        import numpy as np
+        from PIL import Image
+    except ImportError:
+        return '[MP4] OpenCV not available, cannot extract frames'
+
+    text_parts = []
+
+    try:
+        cap = cv2.VideoCapture(str(path))
+
+        if not cap.isOpened():
+            return ''
+
+        # Параметры видео (количество фреймов и fps)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        duration = total_frames / fps if fps > 0 else 0
+
+        # Определяем шаг для извлечения кадров
+        # Для коротких видео (до 30 сек) берем больше кадров
+        if duration < 30:
+            frame_step = max(1, total_frames // 10)  # до 10 кадров
+        elif duration < 300:
+            frame_step = max(1, total_frames // 20)  # до 20 кадров
+        else:
+            frame_step = max(1, total_frames // 30)  # до 30 кадров
+
+        frame_step = min(frame_step, total_frames // 5) if total_frames > 0 else 30
+        frame_step = max(frame_step, 1)
+
+        processed_frames = 0
+        max_frames_to_process = 30
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Обрабатываем каждый N-ый кадр
+            if frame_idx % frame_step == 0 and processed_frames < max_frames_to_process:
+                # Конвертируем BGR (OpenCV) в RGB (PIL)
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
+
+                # OCR на кадре
+                text = pytesseract.image_to_string(pil_image, lang='rus+eng')
+
+                if text and text.strip():
+                    text_parts.append(f"[Frame {frame_idx}] {text.strip()}")
+                    processed_frames += 1
+
+            frame_idx += 1
+
+        cap.release()
+
+        # Объединяем весь текст
+        return '\n'.join(text_parts)
+
+    except Exception as e:
+        return f'[MP4 OCR Error: {str(e)}]'
+
 def extract_text(path: Path) -> str:
     ext = path.suffix.lower().lstrip('.')
     try:
@@ -196,18 +250,18 @@ def extract_text(path: Path) -> str:
             return extract_text_pdf(path)
         elif ext == 'docx':
             return extract_text_docx(path)
-        elif ext in {'html','php'}:
+        elif ext in {'html'}:
             return extract_text_html(path)
         elif ext == 'rtf':
             return extract_text_rtf(path)
-        elif ext == 'ipynb':
-            return extract_text_ipynb(path)
         elif ext == 'xls':
             return extract_text_xls(path)
         elif ext in {'jpg','jpeg','png','gif'}:
             return extract_text_image(path)
         elif ext == 'doc':
             return extract_text_doc(path)
+        elif ext in {'mp4'}:
+            return extract_mp4(path)
         else:
             return extract_text_generic(path)
     except Exception:
