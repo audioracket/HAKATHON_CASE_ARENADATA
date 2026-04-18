@@ -361,9 +361,15 @@ def save_csv(results: List[Dict[str, object]], out_csv: Path):
     out_csv = Path(out_csv)
     with out_csv.open('w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['path','categories','uz','total_hits','ext'])
+        w.writerow(['путь', 'категории ПДн', 'количество_находок', 'УЗ', 'формат файла'])
         for r in results:
-            w.writerow([r['path'], json.dumps(r['categories'], ensure_ascii=False), r['uz'], r.get('total_hits',0), r.get('ext','')])
+            # Формируем строку с категориями, где есть находки
+            cats_list = list(r.get('categories', {}).keys())
+            cats_str = ', '.join(cats_list) if cats_list else '—'
+            total = r.get('total_hits', 0)
+            uz = r.get('uz', 'нет признаков')
+            fmt = r.get('ext', '')
+            w.writerow([r['path'], cats_str, total, uz, fmt])
     return out_csv
 
 # --- Запуск ---
