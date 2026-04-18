@@ -1,7 +1,8 @@
 from __future__ import annotations
-import os, re, io, json, math, csv, itertools, mimetypes
+import os, re, io, json, math, csv, itertools, mimetypes, multiprocessing as mp
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from functools import partial
 
 ROOT_DIR = Path('D:/dataset/share')  # ← укажите корень сканирования
 OUTPUT_CSV = Path('pii_scan_results.csv')
@@ -328,49 +329,93 @@ def estimate_uz(cats: Dict[str, int]) -> str:
 # --- Обход папки, детекция, агрегированный вывод ---
 from datetime import datetime
 
+def process_file(p: Path) -> Optional[Dict[str, object]]:
+    """Обработка одного файла — вынесено для мультипроцессинга"""
+    ext = p.suffix.lower().lstrip('.')
+    if ext not in INCLUDE_EXTS:
+        return None
+    try:
+        text = extract_text(p)
+        cats = detect_categories(text)
+        uz = estimate_uz(cats)
+        return {
+            'path': str(p),
+            'categories': {k:v for k,v in cats.items() if v>0},
+            'uz': uz,
+            'total_hits': sum(cats.values()),
+            'ext': ext
+        }
+    except Exception as e:
+        return {'path': str(p), 'categories': {}, 'uz': 'error', 'error': str(e), 'ext': ext}
+
 def scan_root(root: Path) -> List[Dict[str, object]]:
     results: List[Dict[str, object]] = []
+    files_to_process = []
+    
+    # Сначала собираем все файлы
     for dirpath, dirnames, filenames in os.walk(root):
         for name in filenames:
             p = Path(dirpath) / name
             ext = p.suffix.lower().lstrip('.')
-            if ext not in INCLUDE_EXTS:
-                continue
-            try:
-                text = extract_text(p)
-                cats = detect_categories(text)
-                uz = estimate_uz(cats)
-                res = {
-                    'path': str(p),
-                    'categories': {k:v for k,v in cats.items() if v>0},
-                    'uz': uz,
-                    'total_hits': sum(cats.values()),
-                    'ext': ext
-                }
-                results.append(res)
-            except Exception as e:
-                results.append({'path': str(p), 'categories': {}, 'uz': 'error', 'error': str(e), 'ext': ext})
-    return results
+            if ext in INCLUDE_EXTS:
+                files_to_process.append(p)
+    
+    # Обрабатываем файлы в несколько процессов
+    num_processes = max(1, mp.cpu_count() - 1)  # Оставляем 1 ядро свободным
+    with mp.Pool(processes=num_processes) as pool:
+        results = list(pool.imap_unordered(process_file, files_to_process))
+    
+    # Фильтруем None (файлы, которые не прошли по расширению)
+    return [r for r in results if r is not None]
 
 def print_summary(results: List[Dict[str, object]]):
     for r in results:
         cats = ', '.join(sorted(r['categories'].keys())) if r.get('categories') else '—'
         print(f"{r['path']}: {cats} → {r['uz']}")
 
-def save_csv(results: List[Dict[str, object]], out_csv: Path):
+def save_csv_old(results: List[Dict[str, object]], out_csv: Path):
     out_csv = Path(out_csv)
     with out_csv.open('w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['path','categories','uz','total_hits','ext'])
+        w.writerow(['путь', 'категории ПДн', 'количество_находок', 'УЗ', 'формат файла'])
         for r in results:
-            w.writerow([r['path'], json.dumps(r['categories'], ensure_ascii=False), r['uz'], r.get('total_hits',0), r.get('ext','')])
+            # Формируем строку с категориями, где есть находки
+            cats_list = list(r.get('categories', {}).keys())
+            cats_str = ', '.join(cats_list) if cats_list else '—'
+            total = r.get('total_hits', 0)
+            uz = r.get('uz', 'нет признаков')
+            fmt = r.get('ext', '')
+            w.writerow([r['path'], cats_str, total, uz, fmt])
+    return out_csv
+
+def save_csv_new(results: List[Dict[str, object]], out_csv: Path):
+    """Новый вывод: size, time, name"""
+    out_csv = Path(out_csv)
+    with out_csv.open('w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['size', 'time', 'name'])
+        for r in results:
+            try:
+                p = Path(r['path'])
+                stat = p.stat()
+                size = stat.st_size
+                mtime = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                name = p.name
+                w.writerow([size, mtime, name])
+            except Exception:
+                # Если файл недоступен, пишем прочерки
+                w.writerow(['—', '—', r.get('path', 'unknown')])
     return out_csv
 
 # --- Запуск ---
-if ROOT_DIR.exists():
-    results = scan_root(ROOT_DIR)
-    print_summary(results)
-    save_csv(results, OUTPUT_CSV)
-    print(f"\nСохранено: {OUTPUT_CSV.resolve()}")
-else:
-    print("Укажите корректный ROOT_DIR (существующая директория).")
+if __name__ == '__main__':
+    # Для Windows необходима защита входа в мультипроцессинг
+    mp.set_start_method('spawn', force=True)
+    
+    if ROOT_DIR.exists():
+        results = scan_root(ROOT_DIR)
+        print_summary(results)
+        save_csv_new(results, OUTPUT_CSV)
+        print(f"\nСохранено: {OUTPUT_CSV.resolve()}")
+    else:
+        print("Укажите корректный ROOT_DIR (существующая директория).")
