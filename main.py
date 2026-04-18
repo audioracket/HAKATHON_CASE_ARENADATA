@@ -430,7 +430,19 @@ def save_csv(results: List[Dict[str, object]], out_csv: Path):
 if ROOT_DIR.exists():
     results = scan_root(ROOT_DIR)
     print_summary(results)
-    save_csv(results, OUTPUT_CSV)
-    print(f"\nСохранено: {OUTPUT_CSV.resolve()}")
+    # save_csv(results, OUTPUT_CSV)
+    
+    # Новый вывод в формате: size,time,name
+    with open('output.csv', 'w', encoding='utf-8') as f:
+        f.write('size,time,name\n')
+        for r in results:
+            p = Path(r['path'])
+            if p.exists():
+                size = p.stat().st_size
+                mtime = datetime.fromtimestamp(p.stat().st_mtime).strftime('%b %d %H:%M')
+                name = p.name
+                f.write(f'{size},{mtime},{name}\n')
+    
+    print(f"\nСохранено: output.csv")
 else:
     print("Укажите корректный ROOT_DIR (существующая директория).")
