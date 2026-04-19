@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 
-ROOT_DIR = Path('../share')
+ROOT_DIR = Path("D/dataset/share")
 OUTPUT_CSV = Path('pii_scan_results.csv')
 INCLUDE_EXTS = {'doc', 'docx', 'gif', 'html', 'jpeg', 'jpg', 'pdf', 'mp4', 'png', 'rtf', 'xls'}
 
@@ -666,31 +666,39 @@ def save_csv(results: List[Dict[str, object]], out_csv: Path, save_all: bool = F
 
     with out_csv.open('w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(['путь', 'категории ПДн', 'количество_находок', 'УЗ', 'формат файла'])
+        # Измененные заголовки: size, time, name
+        w.writerow(['size', 'time', 'name'])
 
-        # Сортируем по количеству находок (от большего к меньшему)
+        # Сортируем по размеру файла (от большего к меньшему)
         sorted_results = sorted(filtered_results,
-                                key=lambda x: x.get('total_hits', 0),
+                                key=lambda x: x.get('size', 0),
                                 reverse=True)
 
         for r in sorted_results:
-            cats_list = list(r.get('categories', {}).keys())
-            cats_str = ', '.join(cats_list) if cats_list else '—'
-            total = r.get('total_hits', 0)
-            uz = r.get('uz', 'нет признаков')
-            fmt = r.get('ext', '')
-            w.writerow([r['path'], cats_str, total, uz, fmt])
+            # Получаем размер файла в байтах
+            size = r.get('size', 0)
 
-    # Выводим статистику по УЗ для найденных файлов
-    uz_stats = {}
-    for r in filtered_results:
-        uz = r.get('uz', 'нет признаков')
-        uz_stats[uz] = uz_stats.get(uz, 0) + 1
+            # Получаем время изменения файла
+            file_time = r.get('time', '')
+            if file_time and isinstance(file_time, (int, float)):
+                # Если timestamp, конвертируем в строку
+                file_time = datetime.fromtimestamp(file_time).strftime('%Y-%m-%d %H:%M:%S')
 
-    print(f"\nСтатистика по уровню защищенности (файлы с ПДн):")
-    for uz, count in sorted(uz_stats.items()):
-        print(f"  {uz}: {count} файлов")
+            # Получаем имя файла (путь)
+            name = r.get('path', '')
 
+            w.writerow([size, file_time, name])
+
+    # Выводим статистику по размеру файлов
+    total_size = sum(r.get('size', 0) for r in filtered_results)
+    total_size_mb = total_size / (1024 * 1024)
+    avg_size = total_size / len(filtered_results) if filtered_results else 0
+    avg_size_mb = avg_size / (1024 * 1024)
+
+    print(f"\nСтатистика по файлам с ПДн:")
+    print(f"  Всего файлов: {len(filtered_results)}")
+    print(f"  Общий размер: {total_size_mb:.2f} MB")
+    print(f"  Средний размер: {avg_size_mb:.2f} MB")
     print(f"\nCSV файл сохранен: {out_csv.resolve()}")
     return out_csv
 
